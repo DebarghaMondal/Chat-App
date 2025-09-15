@@ -1,0 +1,674 @@
+import { useState, useEffect, useRef } from "react";
+import useSocket from "../hooks/useSocket";
+import useMessages from "../hooks/useMessages";
+import useRoomUsers from "../hooks/useRoomUsers";
+import useMentions from "../hooks/useMentions";
+import { useTheme } from "../contexts/ThemeContext";
+import MentionAutocomplete from "./MentionAutocomplete";
+import ThemeToggle from "./ThemeToggle";
+import Toast from "./Toast";
+
+export default function ChatRoom({ user, onLeave }) {
+  const [text, setText] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const mobileMenuRef = useRef(null);
+  const { isDark } = useTheme();
+
+  // Backend hooks
+  const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping } = useSocket(user);
+  const { messages, loading: messagesLoading, error: messagesError } = useMessages(socket, user);
+  const { users: roomUsers, typingUsers } = useRoomUsers(socket, user);
+  
+  // Mention hooks
+  const {
+    showAutocomplete,
+    mentionQuery,
+    mentionPosition,
+    inputRef,
+    handleInputChange: handleMentionInputChange,
+    handleMentionSelect,
+    closeMentionAutocomplete,
+    renderTextWithMentions,
+    isMentioned
+  } = useMentions(roomUsers, user);
+
+  // Scroll to bottom on new message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Close mobile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
+        setShowMobileMenu(false);
+      }
+    };
+
+    if (showMobileMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showMobileMenu]);
+
+  const handleSend = (e) => {
+    e.preventDefault();
+    if (!text.trim() || !connected) return;
+
+    // Send message through socket
+    sendMessage(text);
+    setText("");
+    
+    // Stop typing indicator
+    if (isTyping) {
+      stopTyping();
+      setIsTyping(false);
+    }
+    
+    // Clear typing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+  };
+
+  const handleInputChange = (e) => {
+    // Handle mentions first
+    handleMentionInputChange(e, setText);
+    
+    // Handle typing indicators
+    if (connected && e.target.value.trim()) {
+      if (!isTyping) {
+        startTyping();
+        setIsTyping(true);
+      }
+      
+      // Reset typing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      
+      // Stop typing after 2 seconds of inactivity
+      typingTimeoutRef.current = setTimeout(() => {
+        if (isTyping) {
+          stopTyping();
+          setIsTyping(false);
+        }
+      }, 2000);
+    } else if (isTyping) {
+      stopTyping();
+      setIsTyping(false);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+    }
+  };
+
+  const copyRoomLink = () => {
+    const url = `${window.location.origin}?room=${user.roomId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setToastMessage("Room link copied to clipboard!");
+      setShowToast(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {
+      setToastMessage("Failed to copy link");
+      setShowToast(true);
+    });
+  };
+
+  const handleLeave = () => {
+    // Emit leave-room event to clean up user data
+    if (socket && connected) {
+      socket.emit('leave-room');
+    }
+    
+    localStorage.removeItem("chat-user");
+    window.history.replaceState({}, "", "/");
+    if (onLeave) onLeave();
+  };
+
+  return (
+    <div className={`flex flex-col h-screen transition-colors duration-300 ${
+      isDark ? 'bg-gray-900' : 'bg-gray-50'
+    }`}>
+      {/* Header */}
+      <div className={`border-b px-4 py-2 sm:py-2.5 transition-colors duration-300 ${
+        isDark 
+          ? 'bg-gray-800 border-gray-600' 
+          : 'bg-blue-600 border-blue-500'
+      }`}>
+        {/* Mobile Layout */}
+        <div className="flex flex-col space-y-2 sm:hidden">
+          {/* Top Row - Avatar, Title, and Theme Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {/* Group Avatar */}
+              <div className="relative">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                  isDark 
+                    ? 'bg-blue-500' 
+                    : 'bg-white shadow-lg'
+                }`}>
+                  <svg className={`w-4 h-4 ${isDark ? 'text-white' : 'text-blue-600'}`} fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"/>
+                    <path d="M6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"/>
+                  </svg>
+                </div>
+                <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 rounded-full ${
+                  isDark 
+                    ? 'bg-green-400 border-gray-700' 
+                    : 'bg-green-500 border-white'
+                }`}></div>
+              </div>
+              
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center space-x-2">
+                  <h1 className={`font-semibold text-base truncate transition-colors duration-300 ${
+                    isDark ? 'text-white' : 'text-white drop-shadow-sm'
+                  }`}>
+                    Group Chat
+                  </h1>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-white/20 text-white backdrop-blur-sm'
+                  }`}>
+                    {roomUsers.length} online
+                  </span>
+                </div>
+                
+                {/* Mobile Online Users Display */}
+                <div className={`text-xs mt-1 transition-colors duration-300 ${
+                  isDark ? 'text-gray-300' : 'text-white/90'
+                }`}>
+                  {roomUsers.length > 0 ? (
+                    <div className="flex items-center space-x-1 overflow-hidden">
+                      <div className="flex -space-x-1 mr-1">
+                        {roomUsers.slice(0, 3).map((roomUser) => (
+                          <div
+                            key={roomUser.id}
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center text-xs font-semibold ${
+                              roomUser.id === user.id
+                                ? 'bg-blue-500 text-white border-white'
+                                : 'bg-gray-500 text-white border-white'
+                            }`}
+                            title={roomUser.username}
+                          >
+                            {roomUser.username.charAt(0).toUpperCase()}
+                          </div>
+                        ))}
+                        {roomUsers.length > 3 && (
+                          <div className={`w-4 h-4 rounded-full border border-white flex items-center justify-center text-xs font-semibold ${
+                            isDark ? 'bg-gray-600 text-gray-300' : 'bg-gray-400 text-white'
+                          }`}>
+                            +{roomUsers.length - 3}
+                          </div>
+                        )}
+                      </div>
+                      <span className="truncate text-xs">
+                        {roomUsers.length === 1 
+                          ? 'Just you'
+                          : roomUsers.length === 2
+                            ? `You and ${roomUsers.find(u => u.id !== user.id)?.username || 'another user'}`
+                            : `You, ${roomUsers.filter(u => u.id !== user.id).slice(0, 1).map(u => u.username).join('')}${roomUsers.length > 2 ? ` +${roomUsers.length - 2} others` : ''}`
+                        }
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-xs">No users online</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Mobile Menu */}
+            <div className="relative" ref={mobileMenuRef}>
+              <button
+                onClick={() => setShowMobileMenu(!showMobileMenu)}
+                className={`p-2 rounded-lg transition-colors duration-200 ${
+                  isDark 
+                    ? 'hover:bg-gray-700 text-gray-300' 
+                    : 'hover:bg-white/20 text-white'
+                }`}
+                aria-label="More options"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+                </svg>
+              </button>
+
+              {/* Dropdown Menu */}
+              {showMobileMenu && (
+                <div className={`absolute right-0 top-full mt-2 w-48 rounded-lg shadow-lg border z-50 ${
+                  isDark 
+                    ? 'bg-gray-800 border-gray-600' 
+                    : 'bg-white border-gray-200'
+                }`}>
+                  <div className="py-2">
+                    {/* Theme Toggle */}
+                    <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-600">
+                      <div className="flex items-center justify-between">
+                        <span className={`text-sm font-medium ${
+                          isDark ? 'text-gray-300' : 'text-gray-700'
+                        }`}>
+                          Theme
+                        </span>
+                        <ThemeToggle />
+                      </div>
+                    </div>
+
+                    {/* Invite Friends */}
+                    <button
+                      onClick={() => {
+                        copyRoomLink();
+                        setShowMobileMenu(false);
+                      }}
+                      className={`w-full px-3 py-2 text-left text-sm transition-colors duration-200 flex items-center space-x-2 ${
+                        copied 
+                          ? isDark
+                            ? 'text-green-400 hover:bg-gray-700'
+                            : 'text-green-700 hover:bg-gray-50'
+                          : isDark
+                            ? 'text-gray-300 hover:bg-gray-700'
+                            : 'text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {copied ? (
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"/>
+                        </svg>
+                      )}
+                      <span>{copied ? "Link Copied!" : "Invite Friends"}</span>
+                    </button>
+
+                    {/* Leave Room */}
+                    <button
+                      onClick={() => {
+                        handleLeave();
+                        setShowMobileMenu(false);
+                      }}
+                      className={`w-full px-3 py-2 text-left text-sm transition-colors duration-200 flex items-center space-x-2 ${
+                        isDark 
+                          ? 'text-red-400 hover:bg-gray-700' 
+                          : 'text-red-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clipRule="evenodd" />
+                      </svg>
+                      <span>Leave Room</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        
+        {/* Desktop Layout */}
+        <div className="hidden sm:flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            {/* Group Avatar */}
+            <div className="relative">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                isDark 
+                  ? 'bg-blue-500' 
+                  : 'bg-white shadow-lg'
+              }`}>
+                <svg className={`w-5 h-5 ${isDark ? 'text-white' : 'text-blue-600'}`} fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"/>
+                  <path d="M6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"/>
+                </svg>
+              </div>
+              <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 rounded-full ${
+                isDark 
+                  ? 'bg-green-400 border-gray-700' 
+                  : 'bg-green-500 border-white'
+              }`}></div>
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center space-x-3">
+                <h1 className={`font-semibold text-lg truncate transition-colors duration-300 ${
+                  isDark ? 'text-white' : 'text-white drop-shadow-sm'
+                }`}>
+                  Group Chat
+                </h1>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-white/20 text-white backdrop-blur-sm'
+                }`}>
+                  {roomUsers.length} online
+                </span>
+              </div>
+              
+              {/* Enhanced user list */}
+              <div className={`text-sm mt-1 transition-colors duration-300 ${
+                isDark ? 'text-gray-300' : 'text-white/90'
+              }`}>
+                {roomUsers.length > 0 ? (
+                  <div className="flex items-center space-x-2 overflow-hidden">
+                    <div className="flex -space-x-1 mr-2">
+                      {roomUsers.slice(0, 4).map((roomUser) => (
+                        <div
+                          key={roomUser.id}
+                          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-semibold ${
+                            roomUser.id === user.id
+                              ? 'bg-blue-500 text-white border-white'
+                              : 'bg-gray-500 text-white border-white'
+                          }`}
+                          title={roomUser.username}
+                        >
+                          {roomUser.username.charAt(0).toUpperCase()}
+                        </div>
+                      ))}
+                      {roomUsers.length > 4 && (
+                        <div className={`w-6 h-6 rounded-full border-2 border-white flex items-center justify-center text-xs font-semibold ${
+                          isDark ? 'bg-gray-600 text-gray-300' : 'bg-gray-400 text-white'
+                        }`}>
+                          +{roomUsers.length - 4}
+                        </div>
+                      )}
+                    </div>
+                    <span className="truncate font-medium">
+                      {roomUsers.length === 1 
+                        ? 'Just you'
+                        : roomUsers.length === 2
+                          ? `You and ${roomUsers.find(u => u.id !== user.id)?.username || 'another user'}`
+                          : `You, ${roomUsers.filter(u => u.id !== user.id).slice(0, 2).map(u => u.username).join(', ')}${roomUsers.length > 3 ? ` and ${roomUsers.length - 3} others` : ''}`
+                      }
+                    </span>
+                  </div>
+                ) : (
+                  <span>No users online</span>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex items-center space-x-3">
+            {/* Theme Toggle */}
+            <ThemeToggle />
+            
+            {/* Invite Friends Button */}
+            <button
+              onClick={copyRoomLink}
+              className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-2 ${
+                copied 
+                  ? isDark
+                    ? 'bg-green-900/50 text-green-400 border border-green-700'
+                    : 'bg-green-100 text-green-700 border border-green-300'
+                  : isDark
+                    ? 'bg-blue-900/50 text-blue-400 hover:bg-blue-800/50 border border-blue-700'
+                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300'
+              }`}
+              title={copied ? "Invite link copied!" : "Copy invite link to share with friends"}
+            >
+              {copied ? (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"/>
+                </svg>
+              )}
+              <span>{copied ? "Link Copied!" : "Invite Friends"}</span>
+            </button>
+            
+            {/* Leave Button */}
+            <button
+              onClick={handleLeave}
+              className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-2 ${
+                isDark 
+                  ? 'bg-red-900/50 text-red-400 hover:bg-red-800/50 border border-red-700 hover:shadow-lg'
+                  : 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-300 hover:shadow-lg'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clipRule="evenodd" />
+              </svg>
+              <span>Leave Room</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Toast Notification */}
+      <Toast
+        message={toastMessage}
+        type="success"
+        isVisible={showToast}
+        onClose={() => setShowToast(false)}
+        duration={2000}
+      />
+
+      {/* Messages Area */}
+      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-3 sm:space-y-4">
+        {/* Connection Status */}
+        {!connected && (
+          <div className={`border px-3 sm:px-4 py-2 sm:py-3 rounded-lg mb-3 sm:mb-4 transition-colors duration-300 ${
+            isDark 
+              ? 'bg-yellow-900/50 border-yellow-700 text-yellow-300'
+              : 'bg-yellow-100 border-yellow-400 text-yellow-700'
+          }`}>
+            <div className="flex items-center">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span className="text-sm sm:text-base">Reconnecting to chat...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Error Messages */}
+        {(socketError || messagesError) && (
+          <div className={`border px-3 sm:px-4 py-2 sm:py-3 rounded-lg mb-3 sm:mb-4 transition-colors duration-300 ${
+            isDark 
+              ? 'bg-red-900/50 border-red-700 text-red-300'
+              : 'bg-red-100 border-red-400 text-red-700'
+          }`}>
+            <div className="flex items-center">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <span className="text-sm sm:text-base">{socketError || messagesError}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {messagesLoading && (
+          <div className="flex justify-center py-6 sm:py-8">
+            <div className={`animate-spin rounded-full h-6 w-6 sm:h-8 sm:w-8 border-b-2 ${
+              isDark ? 'border-blue-400' : 'border-blue-600'
+            }`}></div>
+          </div>
+        )}
+
+        {/* Messages */}
+        {messages.map((message) => {
+          const isSelfMessage = message.userId === user.id;
+          return (
+            <div
+              key={message.id}
+              className={`flex ${isSelfMessage ? "justify-end" : "justify-start"}`}
+            >
+              <div
+                className={`max-w-[280px] sm:max-w-xs lg:max-w-md px-3 sm:px-4 py-2 rounded-lg transition-colors duration-300 ${
+                  isSelfMessage
+                    ? "bg-blue-600 text-white"
+                    : isDark
+                      ? "bg-gray-700 border border-gray-600 text-gray-100"
+                      : "bg-white border border-gray-200 text-gray-900"
+                }`}
+              >
+                {!isSelfMessage && (
+                  <div className={`text-xs mb-1 font-medium transition-colors duration-300 ${
+                    isDark ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                    {message.username}
+                  </div>
+                )}
+                <div className="text-sm mb-1 sm:mb-2">
+                  {renderTextWithMentions(message.text)}
+                </div>
+                <div className={`text-xs flex items-center justify-end space-x-1 ${
+                  isSelfMessage 
+                    ? "text-blue-100" 
+                    : isDark 
+                      ? "text-gray-400" 
+                      : "text-gray-500"
+                }`}>
+                  <span>
+                    {message.timestamp ? new Date(message.timestamp).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    }) : new Date().toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  {isSelfMessage && (
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Typing Indicators */}
+        {typingUsers.length > 0 && (
+          <div className="flex justify-start">
+            <div className={`border px-3 sm:px-4 py-2 rounded-lg max-w-[280px] sm:max-w-xs transition-colors duration-300 ${
+              isDark 
+                ? 'bg-gray-700 border-gray-600 text-gray-300'
+                : 'bg-gray-100 border-gray-200 text-gray-600'
+            }`}>
+              <div className="text-xs">
+                {typingUsers.length === 1
+                  ? `${typingUsers[0]} is typing...`
+                  : `${typingUsers.slice(0, -1).join(", ")} and ${
+                      typingUsers[typingUsers.length - 1]
+                    } are typing...`}
+              </div>
+              <div className="flex space-x-1 mt-1">
+                <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce ${
+                  isDark ? 'bg-gray-500' : 'bg-gray-400'
+                }`}></div>
+                <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce ${
+                  isDark ? 'bg-gray-500' : 'bg-gray-400'
+                }`} style={{ animationDelay: "0.1s" }}></div>
+                <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce ${
+                  isDark ? 'bg-gray-500' : 'bg-gray-400'
+                }`} style={{ animationDelay: "0.2s" }}></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <form
+        onSubmit={handleSend}
+        className={`border-t shadow-lg transition-colors duration-300 ${
+          isDark 
+            ? 'bg-gray-800 border-gray-700' 
+            : 'bg-white border-gray-200'
+        }`}
+      >
+        <div className="max-w-4xl w-full mx-auto p-2 sm:p-3 flex items-center gap-2 sm:gap-3 relative">
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={connected ? "Type a message... (use @ to mention)" : "Connecting..."}
+            value={text}
+            onChange={handleInputChange}
+            disabled={!connected}
+            className={`flex-1 px-3 sm:px-4 py-2 sm:py-3 border-2 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base touch-manipulation transition-colors duration-300 ${
+              isDark 
+                ? 'border-gray-600 bg-gray-700 text-white placeholder-gray-400 disabled:bg-gray-600'
+                : 'border-gray-200 bg-white text-gray-900 placeholder-gray-500 disabled:bg-gray-100'
+            } disabled:cursor-not-allowed`}
+            aria-label="Type a message"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim() || !connected}
+            className={`px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl font-semibold text-xs sm:text-sm touch-manipulation transition-all duration-200 flex items-center space-x-1 sm:space-x-2 shadow-lg ${
+              !text.trim() || !connected
+                ? isDark
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : isDark
+                  ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 hover:shadow-xl active:scale-[0.98]'
+                  : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 hover:shadow-xl active:scale-[0.98]'
+            }`}
+            aria-disabled={!text.trim() || !connected}
+          >
+            {connected ? (
+              <>
+                <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
+                </svg>
+                <span>Send</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                </svg>
+                <span>Offline</span>
+              </>
+            )}
+          </button>
+          
+          {/* Mention Autocomplete */}
+          <MentionAutocomplete
+            users={roomUsers.filter(u => u.id !== user.id)}
+            isVisible={showAutocomplete}
+            onSelect={(selectedUser) => handleMentionSelect(selectedUser, text, setText)}
+            onClose={closeMentionAutocomplete}
+            position={mentionPosition}
+            query={mentionQuery}
+          />
+        </div>
+      </form>
+
+      {/* Developer Credit */}
+      <div className={`border-t py-2 transition-colors duration-300 ${
+        isDark 
+          ? 'bg-gray-800 border-gray-700' 
+          : 'bg-gray-50 border-gray-200'
+      }`}>
+        <div className="max-w-4xl w-full mx-auto px-4">
+          <p className={`text-xs text-center flex items-center justify-center gap-1 transition-colors duration-300 ${
+            isDark ? 'text-gray-500' : 'text-gray-400'
+          }`}>
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+            Developed by Debargha
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
