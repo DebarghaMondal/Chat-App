@@ -23,6 +23,10 @@ export default function ChatRoom({ user, onLeave }) {
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  // Inline attachment state (Telegram-like)
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [selectedImagePreview, setSelectedImagePreview] = useState(null);
+  const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const { isDark } = useTheme();
@@ -63,6 +67,33 @@ export default function ChatRoom({ user, onLeave }) {
     handleScroll();
     return () => el.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Inline attachment handlers
+  const handleAttachClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (editingMessage) return; // do not allow attachments while editing
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type?.startsWith('image/')) {
+      console.warn('Only images are supported in inline attach');
+      return;
+    }
+    setSelectedImageFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => setSelectedImagePreview(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const clearSelectedImage = () => {
+    setSelectedImageFile(null);
+    setSelectedImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   // Emit read receipts when at bottom (messages visible)
   useEffect(() => {
@@ -105,9 +136,9 @@ export default function ChatRoom({ user, onLeave }) {
     };
   }, [showMobileMenu]);
 
-  const handleSend = (e) => {
+  const handleSend = async (e) => {
     e.preventDefault();
-    if (!text.trim() || !connected) return;
+    if ((!text.trim() && !selectedImageFile) || !connected) return;
 
     console.log('Sending message with replyingTo:', replyingTo);
 
@@ -121,12 +152,46 @@ export default function ChatRoom({ user, onLeave }) {
       }
       setEditingMessage(null);
     } else {
-      // Send new message with reply info
-      sendMessage(text, replyingTo);
-      setReplyingTo(null); // Clear reply after sending
+      // Send new message (with optional image attachment)
+      if (selectedImageFile && selectedImageFile.type?.startsWith('image/')) {
+        try {
+          const reader = new FileReader();
+          const imageData = await new Promise((resolve, reject) => {
+            reader.onload = (ev) => resolve(ev.target.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(selectedImageFile);
+          });
+
+          const fileMessage = {
+            text: text.trim() ? text.trim() : `🖼️ ${selectedImageFile.name}`,
+            fileType: selectedImageFile.type,
+            fileName: selectedImageFile.name,
+            fileSize: selectedImageFile.size,
+            imageData,
+            isImage: true,
+            replyTo: replyingTo || null,
+          };
+
+          if (socket && connected) {
+            socket.emit('send-message', fileMessage);
+          }
+        } catch (err) {
+          console.error('Failed to read image:', err);
+        }
+      } else if (text.trim()) {
+        // Text-only message
+        sendMessage(text, replyingTo);
+      }
+
+      // Clear reply after sending
+      setReplyingTo(null);
     }
     
+    // Reset input and attachment
     setText("");
+    setSelectedImageFile(null);
+    setSelectedImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     
     // Stop typing indicator
     if (isTyping) {
@@ -583,11 +648,12 @@ export default function ChatRoom({ user, onLeave }) {
         )}
 
         {/* Messages */}
-        {messages.map((message) => {
+        {messages.map((message, idx) => {
           const isSelfMessage = message.userId === user.id;
+          const key = `${message.id || message._id || 'msg'}-${message.timestamp || idx}`;
           return (
             <MessageBubble
-              key={message.id}
+              key={key}
               message={message}
               isSelfMessage={isSelfMessage}
               user={user}
@@ -650,27 +716,59 @@ export default function ChatRoom({ user, onLeave }) {
             />
           )}
           
+          {/* Selected image preview chip */}
+          {selectedImagePreview && !editingMessage && (
+            <div className="mb-2 flex items-center gap-2">
+              <div className={`flex items-center gap-2 px-2 py-1 rounded-lg border text-xs sm:text-sm max-w-full overflow-hidden ${
+                isDark ? 'border-gray-600 bg-gray-700 text-gray-100' : 'border-gray-200 bg-gray-50 text-gray-700'
+              }`}>
+                <img src={selectedImagePreview} alt="preview" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                <span className="truncate max-w-[50vw] sm:max-w-xs">{selectedImageFile?.name}</span>
+                <button type="button" onClick={clearSelectedImage} className={`ml-1 p-1 rounded ${isDark ? 'hover:bg-gray-600 text-gray-300' : 'hover:bg-gray-200 text-gray-600'}`} aria-label="Remove image">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 sm:gap-3">
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={editingMessage ? "Edit message..." : connected ? "Type a message... (use @ to mention)" : "Connecting..."}
-            value={text}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            disabled={!connected}
-            className={`flex-1 px-3 sm:px-4 py-2 sm:py-3 border-2 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base touch-manipulation transition-colors duration-300 ${
-              isDark 
-                ? 'border-gray-600 bg-gray-700 text-white placeholder-gray-400 disabled:bg-gray-600'
-                : 'border-gray-200 bg-white text-gray-900 placeholder-gray-500 disabled:bg-gray-100'
-            } disabled:cursor-not-allowed`}
-            aria-label="Type a message"
-          />
+          {/* Hidden file input */}
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
+
+          {/* Input with inline attach icon */}
+          <div className="relative flex-1">
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={editingMessage ? "Edit message..." : connected ? "Type a message... (use @ to mention)" : "Connecting..."}
+              value={text}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              disabled={!connected}
+              className={`w-full pr-12 pl-3 sm:pl-4 py-2 sm:py-3 border-2 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base touch-manipulation transition-colors duration-300 ${
+                isDark 
+                  ? 'border-gray-600 bg-gray-700 text-white placeholder-gray-400 disabled:bg-gray-600'
+                  : 'border-gray-200 bg-white text-gray-900 placeholder-gray-500 disabled:bg-gray-100'
+              } disabled:cursor-not-allowed`}
+              aria-label="Type a message"
+            />
+            {!editingMessage && (
+              <button
+                type="button"
+                onClick={handleAttachClick}
+                className={`absolute inset-y-0 right-2 my-auto p-2 rounded-md ${isDark ? 'hover:bg-gray-600 text-gray-300' : 'hover:bg-gray-100 text-gray-600'}`}
+                aria-label="Attach image"
+                title="Attach image"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clipRule="evenodd"/></svg>
+              </button>
+            )}
+          </div>
           <button
             type="submit"
-            disabled={!text.trim() || !connected}
+            disabled={(!text.trim() && !selectedImageFile) || !connected}
             className={`px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl font-semibold text-xs sm:text-sm touch-manipulation transition-all duration-200 flex items-center space-x-1 sm:space-x-2 shadow-lg ${
-              !text.trim() || !connected
+              (!text.trim() && !selectedImageFile) || !connected
                 ? isDark
                   ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                   : 'bg-gray-300 text-gray-500 cursor-not-allowed'
@@ -678,7 +776,7 @@ export default function ChatRoom({ user, onLeave }) {
                   ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 hover:shadow-xl active:scale-[0.98]'
                   : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 hover:shadow-xl active:scale-[0.98]'
             }`}
-            aria-disabled={!text.trim() || !connected}
+            aria-disabled={(!text.trim() && !selectedImageFile) || !connected}
           >
             {connected ? (
               <>
