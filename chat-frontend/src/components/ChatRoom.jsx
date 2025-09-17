@@ -27,7 +27,7 @@ export default function ChatRoom({ user, onLeave }) {
 
   // Backend hooks
   const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping } = useSocket(user);
-  const { messages, loading: messagesLoading, error: messagesError } = useMessages(socket, user);
+  const { messages, loading: messagesLoading, error: messagesError, updateMessage } = useMessages(socket, user);
   const { users: roomUsers, typingUsers } = useRoomUsers(socket, user);
   
   // Mention hooks
@@ -73,7 +73,12 @@ export default function ChatRoom({ user, onLeave }) {
 
     if (editingMessage) {
       // Edit existing message
-      socket.emit('edit-message', { messageId: editingMessage.id, newText: text.trim() });
+      const newText = text.trim();
+      socket.emit('edit-message', { messageId: editingMessage.id, newText });
+      // Optimistically update UI
+      if (updateMessage) {
+        updateMessage(editingMessage.id, { text: newText, edited: true });
+      }
       setEditingMessage(null);
     } else {
       // Send new message with reply info

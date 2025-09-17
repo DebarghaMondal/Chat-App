@@ -70,10 +70,38 @@ export default function useMessages(socket, user) {
       });
     };
 
+    // Update message on edit events from server
+    const handleMessageEdited = (data) => {
+      // Support different payload shapes from backend
+      // Could be { message } or { messageId, newText } or { updated }
+      const msg = data?.message || data?.updated || null;
+      const messageId = data?.messageId || msg?.id;
+      const newText = data?.newText || msg?.text;
+      if (!messageId) return;
+
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === messageId ? { ...m, text: newText ?? m.text, edited: true } : m
+        );
+        try {
+          localStorage.setItem(`chat-messages-${user.roomId}`, JSON.stringify(updated));
+        } catch (err) {
+          console.warn('Failed to save to localStorage:', err);
+        }
+        return updated;
+      });
+    };
+
     socket.on('new-message', handleNewMessage);
+    socket.on('message-edited', handleMessageEdited);
+    socket.on('message-updated', handleMessageEdited);
+    socket.on('edit-message-success', handleMessageEdited);
 
     return () => {
       socket.off('new-message', handleNewMessage);
+      socket.off('message-edited', handleMessageEdited);
+      socket.off('message-updated', handleMessageEdited);
+      socket.off('edit-message-success', handleMessageEdited);
     };
   }, [socket, user?.roomId]);
 
@@ -88,11 +116,27 @@ export default function useMessages(socket, user) {
     }
   };
 
+  // Helper to optimistically update a message locally
+  const updateMessage = (messageId, updater) => {
+    setMessages(prev => {
+      const updated = prev.map(m => m.id === messageId ? { ...m, ...(typeof updater === 'function' ? updater(m) : updater) } : m);
+      if (user?.roomId) {
+        try {
+          localStorage.setItem(`chat-messages-${user.roomId}`, JSON.stringify(updated));
+        } catch (err) {
+          console.warn('Failed to save to localStorage:', err);
+        }
+      }
+      return updated;
+    });
+  };
+
   return {
     messages,
     loading,
     error,
     addMessage,
-    clearMessages
+    clearMessages,
+    updateMessage
   };
 }
