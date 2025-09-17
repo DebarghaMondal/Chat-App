@@ -52,12 +52,20 @@ export default function useMessages(socket, user) {
 
     const handleNewMessage = (data) => {
       const { message } = data;
+      // Debug
+      try { console.debug('[socket] new-message', message); } catch {}
       setMessages(prev => {
         // Avoid duplicates
-        if (prev.some(msg => msg.id === message.id)) {
+        const incomingId = message?.id || message?._id;
+        if (prev.some(msg => (msg.id || msg._id) === incomingId)) {
           return prev;
         }
-        const updated = [...prev, message];
+        const normalized = { ...message };
+        if (!normalized.id && normalized._id) normalized.id = normalized._id;
+        if (normalized.userId && user?.id && normalized.userId === user.id && !normalized.status) {
+          normalized.status = 'sent';
+        }
+        const updated = [...prev, normalized];
         
         // Also save to localStorage as backup
         try {
@@ -68,6 +76,13 @@ export default function useMessages(socket, user) {
         
         return updated;
       });
+
+      // Emit delivery receipt for messages from others
+      try {
+        if (message?.id && message?.userId && user?.id && message.userId !== user.id) {
+          socket.emit('mark-delivered', { roomId: user.roomId, messageId: message.id });
+        }
+      } catch {}
     };
 
     // Update message on edit events from server
@@ -92,16 +107,62 @@ export default function useMessages(socket, user) {
       });
     };
 
+    // Delivery receipts for messages
+    const handleMessageDelivered = (data) => {
+      try { console.debug('[socket] delivered', data); } catch {}
+      const id = data?.messageId || data?.id || data?.message?.id || data?._id || data?.message?._id;
+      if (!id) return;
+      setMessages(prev => {
+        const updated = prev.map(m => (m.id === id || m._id === id) ? { ...m, status: 'delivered' } : m);
+        try {
+          localStorage.setItem(`chat-messages-${user.roomId}`, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    };
+
+    // Read receipts for messages
+    const handleMessageRead = (data) => {
+      try { console.debug('[socket] read', data); } catch {}
+      // Could be a single id or array of ids
+      const ids = (data?.messageIds || data?.ids || [data?.messageId || data?.id || data?.message?.id || data?._id || data?.message?._id]).filter(Boolean);
+      if (!ids || ids.length === 0) return;
+      setMessages(prev => {
+        const updated = prev.map(m => ids.includes(m.id) || ids.includes(m._id) ? { ...m, status: 'read' } : m);
+        try {
+          localStorage.setItem(`chat-messages-${user.roomId}`, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    };
+
     socket.on('new-message', handleNewMessage);
     socket.on('message-edited', handleMessageEdited);
     socket.on('message-updated', handleMessageEdited);
     socket.on('edit-message-success', handleMessageEdited);
+    socket.on('message-delivered', handleMessageDelivered);
+    socket.on('delivered', handleMessageDelivered);
+    socket.on('message-read', handleMessageRead);
+    socket.on('messages-read', handleMessageRead);
+    socket.on('read', handleMessageRead);
+    // Common alternative event names for read receipts
+    socket.on('message-seen', handleMessageRead);
+    socket.on('messages-seen', handleMessageRead);
+    socket.on('seen', handleMessageRead);
 
     return () => {
       socket.off('new-message', handleNewMessage);
       socket.off('message-edited', handleMessageEdited);
       socket.off('message-updated', handleMessageEdited);
       socket.off('edit-message-success', handleMessageEdited);
+      socket.off('message-delivered', handleMessageDelivered);
+      socket.off('delivered', handleMessageDelivered);
+      socket.off('message-read', handleMessageRead);
+      socket.off('messages-read', handleMessageRead);
+      socket.off('read', handleMessageRead);
+      socket.off('message-seen', handleMessageRead);
+      socket.off('messages-seen', handleMessageRead);
+      socket.off('seen', handleMessageRead);
     };
   }, [socket, user?.roomId]);
 

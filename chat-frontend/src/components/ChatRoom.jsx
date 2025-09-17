@@ -21,6 +21,8 @@ export default function ChatRoom({ user, onLeave }) {
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const typingTimeoutRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const { isDark } = useTheme();
@@ -47,6 +49,44 @@ export default function ChatRoom({ user, onLeave }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Track scroll position to determine if user is at bottom
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      setIsAtBottom(nearBottom);
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    // Initialize
+    handleScroll();
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Emit read receipts when at bottom (messages visible)
+  useEffect(() => {
+    if (!socket || !connected) return;
+    if (!isAtBottom) return;
+    if (!messages || messages.length === 0) return;
+
+    // Collect recent messages from others to mark as read
+    const otherMsgIds = messages
+      .filter(m => m.userId && m.userId !== user.id)
+      .slice(-50) // cap to avoid huge payloads
+      .map(m => m.id)
+      .filter(Boolean);
+
+    if (otherMsgIds.length > 0) {
+      const payload = { roomId: user.roomId, messageIds: otherMsgIds };
+      socket.emit('mark-read', payload);
+      // Send common aliases for broader backend compatibility
+      socket.emit('message-read', payload);
+      socket.emit('messages-read', payload);
+      socket.emit('seen', payload);
+      socket.emit('messages-seen', payload);
+    }
+  }, [messages, isAtBottom, connected, socket, user?.id, user?.roomId]);
 
   // Close mobile menu when clicking outside
   useEffect(() => {
@@ -500,7 +540,7 @@ export default function ChatRoom({ user, onLeave }) {
       />
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 sm:space-y-3 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent touch-pan-y">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 sm:space-y-3 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent touch-pan-y">
         {/* Connection Status */}
         {!connected && (
           <div className={`border px-3 sm:px-4 py-2 sm:py-3 rounded-lg mb-3 sm:mb-4 transition-colors duration-300 ${
