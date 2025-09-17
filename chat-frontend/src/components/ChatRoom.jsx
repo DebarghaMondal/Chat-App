@@ -7,6 +7,9 @@ import { useTheme } from "../contexts/ThemeContext";
 import MentionAutocomplete from "./MentionAutocomplete";
 import ThemeToggle from "./ThemeToggle";
 import Toast from "./Toast";
+import ReplyPreview from "./ReplyPreview";
+import MessageBubble from "./MessageBubble";
+// FileUpload removed as per requirement
 
 export default function ChatRoom({ user, onLeave }) {
   const [text, setText] = useState("");
@@ -15,6 +18,8 @@ export default function ChatRoom({ user, onLeave }) {
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [editingMessage, setEditingMessage] = useState(null);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const mobileMenuRef = useRef(null);
@@ -64,8 +69,18 @@ export default function ChatRoom({ user, onLeave }) {
     e.preventDefault();
     if (!text.trim() || !connected) return;
 
-    // Send message through socket
-    sendMessage(text);
+    console.log('Sending message with replyingTo:', replyingTo);
+
+    if (editingMessage) {
+      // Edit existing message
+      socket.emit('edit-message', { messageId: editingMessage.id, newText: text.trim() });
+      setEditingMessage(null);
+    } else {
+      // Send new message with reply info
+      sendMessage(text, replyingTo);
+      setReplyingTo(null); // Clear reply after sending
+    }
+    
     setText("");
     
     // Stop typing indicator
@@ -114,6 +129,13 @@ export default function ChatRoom({ user, onLeave }) {
     }
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend(e);
+    }
+  };
+
   const copyRoomLink = () => {
     const url = `${window.location.origin}?room=${user.roomId}`;
     navigator.clipboard.writeText(url).then(() => {
@@ -125,6 +147,23 @@ export default function ChatRoom({ user, onLeave }) {
       setToastMessage("Failed to copy link");
       setShowToast(true);
     });
+  };
+
+  const handleReply = (message) => {
+    console.log('handleReply called with message:', message);
+    setReplyingTo(message);
+    inputRef.current?.focus();
+  };
+
+  const handleCancelReply = () => {
+    setReplyingTo(null);
+  };
+
+
+  const handleEditMessage = (message) => {
+    setEditingMessage(message);
+    setText(message.text);
+    inputRef.current?.focus();
   };
 
   const handleLeave = () => {
@@ -456,7 +495,7 @@ export default function ChatRoom({ user, onLeave }) {
       />
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-3 sm:space-y-4">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 sm:space-y-3 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent touch-pan-y">
         {/* Connection Status */}
         {!connected && (
           <div className={`border px-3 sm:px-4 py-2 sm:py-3 rounded-lg mb-3 sm:mb-4 transition-colors duration-300 ${
@@ -502,53 +541,16 @@ export default function ChatRoom({ user, onLeave }) {
         {messages.map((message) => {
           const isSelfMessage = message.userId === user.id;
           return (
-            <div
+            <MessageBubble
               key={message.id}
-              className={`flex ${isSelfMessage ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[280px] sm:max-w-xs lg:max-w-md px-3 sm:px-4 py-2 rounded-lg transition-colors duration-300 ${
-                  isSelfMessage
-                    ? "bg-blue-600 text-white"
-                    : isDark
-                      ? "bg-gray-700 border border-gray-600 text-gray-100"
-                      : "bg-white border border-gray-200 text-gray-900"
-                }`}
-              >
-                {!isSelfMessage && (
-                  <div className={`text-xs mb-1 font-medium transition-colors duration-300 ${
-                    isDark ? 'text-gray-400' : 'text-gray-500'
-                  }`}>
-                    {message.username}
-                  </div>
-                )}
-                <div className="text-sm mb-1 sm:mb-2">
-                  {renderTextWithMentions(message.text)}
-                </div>
-                <div className={`text-xs flex items-center justify-end space-x-1 ${
-                  isSelfMessage 
-                    ? "text-blue-100" 
-                    : isDark 
-                      ? "text-gray-400" 
-                      : "text-gray-500"
-                }`}>
-                  <span>
-                    {message.timestamp ? new Date(message.timestamp).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    }) : new Date().toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
-                  {isSelfMessage && (
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  )}
-                </div>
-              </div>
-            </div>
+              message={message}
+              isSelfMessage={isSelfMessage}
+              user={user}
+              renderTextWithMentions={renderTextWithMentions}
+              onReply={handleReply}
+              messages={messages}
+              onEdit={handleEditMessage}
+            />
           );
         })}
 
@@ -562,9 +564,9 @@ export default function ChatRoom({ user, onLeave }) {
             }`}>
               <div className="text-xs">
                 {typingUsers.length === 1
-                  ? `${typingUsers[0]} is typing...`
-                  : `${typingUsers.slice(0, -1).join(", ")} and ${
-                      typingUsers[typingUsers.length - 1]
+                  ? `${typingUsers[0].username} is typing...`
+                  : `${typingUsers.slice(0, -1).map(u => u.username).join(", ")} and ${
+                      typingUsers[typingUsers.length - 1].username
                     } are typing...`}
               </div>
               <div className="flex space-x-1 mt-1">
@@ -594,13 +596,23 @@ export default function ChatRoom({ user, onLeave }) {
             : 'bg-white border-gray-200'
         }`}
       >
-        <div className="max-w-4xl w-full mx-auto p-2 sm:p-3 flex items-center gap-2 sm:gap-3 relative">
+        <div className="max-w-4xl w-full mx-auto p-2 sm:p-3 relative">
+          {/* Reply Preview */}
+          {replyingTo && (
+            <ReplyPreview 
+              message={replyingTo} 
+              onCancel={handleCancelReply} 
+            />
+          )}
+          
+          <div className="flex items-center gap-2 sm:gap-3">
           <input
             ref={inputRef}
             type="text"
-            placeholder={connected ? "Type a message... (use @ to mention)" : "Connecting..."}
+            placeholder={editingMessage ? "Edit message..." : connected ? "Type a message... (use @ to mention)" : "Connecting..."}
             value={text}
             onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
             disabled={!connected}
             className={`flex-1 px-3 sm:px-4 py-2 sm:py-3 border-2 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base touch-manipulation transition-colors duration-300 ${
               isDark 
@@ -628,7 +640,7 @@ export default function ChatRoom({ user, onLeave }) {
                 <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="currentColor" viewBox="0 0 20 20">
                   <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
                 </svg>
-                <span>Send</span>
+                <span>{editingMessage ? 'Save' : 'Send'}</span>
               </>
             ) : (
               <>
@@ -649,6 +661,7 @@ export default function ChatRoom({ user, onLeave }) {
             position={mentionPosition}
             query={mentionQuery}
           />
+          </div>
         </div>
       </form>
 

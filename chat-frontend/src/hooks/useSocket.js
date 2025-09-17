@@ -76,9 +76,13 @@ export default function useSocket(user) {
   }, [user?.id, user?.username, user?.roomId]);
 
   // Helper functions
-  const sendMessage = (text) => {
+  const sendMessage = (text, replyTo = null) => {
     if (socket && connected && text.trim()) {
-      socket.emit('send-message', { text: text.trim() });
+      console.log('useSocket sendMessage called with:', { text: text.trim(), replyTo });
+      socket.emit('send-message', { 
+        text: text.trim(),
+        replyTo: replyTo 
+      });
     }
   };
 

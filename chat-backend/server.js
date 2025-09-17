@@ -119,58 +119,80 @@ io.on('connection', (socket) => {
   // Handle sending messages
   socket.on('send-message', async (data) => {
     try {
+      const { text, replyTo } = data;
       const user = activeUsers.get(socket.id);
-      if (!user) {
-        socket.emit('error', { message: 'User not found. Please rejoin the room.' });
-        return;
-      }
-
-      const { text } = data;
-      if (!text || !text.trim()) {
-        socket.emit('error', { message: 'Message text is required' });
+      
+      if (!user || !text || !text.trim()) {
         return;
       }
 
       const message = {
         id: uuidv4(),
-        userId: user.id,
-        username: user.username,
-        roomId: user.roomId,
         text: text.trim(),
-        createdAt: new Date().toISOString()
+        username: user.username,
+        userId: user.id,
+        roomId: user.roomId,
+        timestamp: new Date().toISOString(),
+        replyTo: replyTo || null,
+        status: 'sent',
+        edited: false,
+        deleted: false
       };
 
-      // Save message to database
+      // Save to database
       await db.saveMessage(message);
-
-      // Broadcast message to room
-      io.to(user.roomId).emit('new-message', { message });
-
-      console.log(`Message from ${user.username} in room ${user.roomId}: ${text}`);
+      
+      // Broadcast to room
+      socket.to(user.roomId).emit('new-message', { message });
+      
+      // Send back to sender for confirmation
+      socket.emit('new-message', { message });
+      
     } catch (error) {
       console.error('Error sending message:', error);
       socket.emit('error', { message: 'Failed to send message' });
     }
   });
 
+
+  // Handle message editing
+  socket.on('edit-message', async (data) => {
+    try {
+      const { messageId, newText } = data;
+      const user = activeUsers.get(socket.id);
+      
+      if (!user || !messageId || !newText) return;
+
+      // Update message in database
+      const updatedMessage = {
+        id: messageId,
+        text: newText.trim(),
+        edited: true,
+        editedAt: new Date().toISOString()
+      };
+
+      // Broadcast edited message to room
+      io.to(user.roomId).emit('message-edited', { updatedMessage });
+      
+    } catch (error) {
+      console.error('Error editing message:', error);
+      socket.emit('error', { message: 'Failed to edit message' });
+    }
+  });
+
+
   // Handle typing indicators
   socket.on('typing-start', () => {
     const user = activeUsers.get(socket.id);
     if (user) {
-      socket.to(user.roomId).emit('user-typing', { 
-        userId: user.id, 
-        username: user.username 
-      });
+      socket.to(user.roomId).emit('user-typing', { userId: user.id });
     }
   });
 
   socket.on('typing-stop', () => {
     const user = activeUsers.get(socket.id);
     if (user) {
-      socket.to(user.roomId).emit('user-stopped-typing', { 
-        userId: user.id, 
-        username: user.username 
-      });
+      socket.to(user.roomId).emit('user-stopped-typing', { userId: user.id });
     }
   });
 
