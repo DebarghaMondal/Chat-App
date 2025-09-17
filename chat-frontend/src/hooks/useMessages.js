@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { API_BASE_URL } from '../config/api';
 
 export default function useMessages(socket, user) {
   const [messages, setMessages] = useState([]);
@@ -18,7 +17,7 @@ export default function useMessages(socket, user) {
     const loadMessages = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`${BACKEND_URL}/api/rooms/${user.roomId}/messages`);
+        const response = await fetch(`${API_BASE_URL}/api/rooms/${user.roomId}/messages`);
         
         if (!response.ok) {
           throw new Error(`Failed to load messages: ${response.status}`);

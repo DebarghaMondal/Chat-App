@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+import { API_BASE_URL } from '../config/api';
 
 export default function useSocket(user) {
   const [socket, setSocket] = useState(null);
@@ -22,7 +21,7 @@ export default function useSocket(user) {
     }
 
     // Create socket connection
-    const newSocket = io(BACKEND_URL, {
+    const newSocket = io(API_BASE_URL, {
       transports: ['websocket', 'polling'],
       timeout: 20000,
     });
