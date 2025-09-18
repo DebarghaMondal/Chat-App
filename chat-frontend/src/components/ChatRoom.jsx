@@ -650,7 +650,8 @@ export default function ChatRoom({ user, onLeave }) {
         {/* Messages */}
         {messages.map((message, idx) => {
           const isSelfMessage = message.userId === user.id;
-          const key = `${message.id || message._id || 'msg'}-${message.timestamp || idx}`;
+          // Stable key to prevent DOM reorder across reloads
+          const key = `msg-${message.id || message._id || message._seq || idx}`;
           return (
             <MessageBubble
               key={key}
