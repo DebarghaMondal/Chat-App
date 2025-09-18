@@ -97,6 +97,31 @@ export default function useMessages(socket, user) {
       .map(({ m }) => m);
   };
 
+  // Merge two message arrays by id/_id, preserving existing items' fields when duplicates
+  const mergeMessages = (existing, incoming) => {
+    const byId = new Map();
+    const getId = (m) => m?.id || m?._id;
+
+    // Seed with existing to preserve local fields like _seq
+    for (const m of existing || []) {
+      const id = getId(m);
+      if (id != null) byId.set(id, m);
+      else byId.set(`noid-${Math.random()}`, m);
+    }
+
+    // Add/overwrite from incoming when not present
+    for (const m of incoming || []) {
+      const id = getId(m);
+      if (id != null) {
+        if (!byId.has(id)) byId.set(id, m);
+      } else {
+        byId.set(`noid-${Math.random()}`, m);
+      }
+    }
+
+    return Array.from(byId.values());
+  };
+
   // Load initial messages from backend
   useEffect(() => {
     if (!user?.roomId) {
@@ -108,6 +133,21 @@ export default function useMessages(socket, user) {
     const loadMessages = async () => {
       try {
         setLoading(true);
+        // 1) Hydrate from localStorage immediately (so messages don't disappear on reload)
+        let localArr = [];
+        try {
+          const saved = localStorage.getItem(`chat-messages-${user.roomId}`);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            localArr = Array.isArray(parsed) ? parsed : [];
+          }
+        } catch {}
+        if (localArr.length > 0) {
+          initSeqFromMessages(user.roomId, localArr);
+          const ensuredLocal = assignSeqIfMissing(user.roomId, localArr);
+          setMessages(sortMessages(ensuredLocal));
+        }
+
         const response = await fetch(`${API_BASE_URL}/api/rooms/${user.roomId}/messages`);
         
         if (!response.ok) {
@@ -119,8 +159,10 @@ export default function useMessages(socket, user) {
         // Ensure stable _seq per message id across reloads
         initSeqFromMessages(user.roomId, initial);
         const withSeq = assignSeqIfMissing(user.roomId, initial);
+        // 2) Merge backend with local (to keep older messages if backend returns a limited window)
+        const merged = mergeMessages(localArr, withSeq);
         // Sort primarily by timestamp asc, then by _seq for stability
-        const sorted = [...withSeq].sort((a, b) => {
+        const sorted = [...merged].sort((a, b) => {
           const ta = (typeof a.timestamp === 'number') ? a.timestamp : Date.parse(a.timestamp || a.createdAt || a.time || a.ts || 0) || 0;
           const tb = (typeof b.timestamp === 'number') ? b.timestamp : Date.parse(b.timestamp || b.createdAt || b.time || b.ts || 0) || 0;
           if (ta !== tb) return ta - tb;
@@ -129,6 +171,10 @@ export default function useMessages(socket, user) {
           return sa - sb;
         });
         setMessages(sorted);
+        // Persist merged messages so they remain across reloads while in room
+        try {
+          localStorage.setItem(`chat-messages-${user.roomId}`, JSON.stringify(sorted));
+        } catch {}
         setError(null);
       } catch (err) {
         console.error('Error loading messages:', err);
