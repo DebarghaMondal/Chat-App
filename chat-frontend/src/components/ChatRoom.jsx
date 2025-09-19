@@ -32,6 +32,8 @@ export default function ChatRoom({ user, onLeave }) {
   const typingTimeoutRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const { isDark } = useTheme();
+  // Avoid showing lock/unlock toast when joining (initial state sync)
+  const initialLockKnownRef = useRef(false);
 
   // Backend hooks
   const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping, toggleRoomLock } = useSocket(user);
@@ -56,17 +58,32 @@ export default function ChatRoom({ user, onLeave }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Listen for lock state updates and show a toast to everyone
+  // Listen for lock state updates and show a toast to everyone (skip initial)
   useEffect(() => {
     if (!socket) return;
     const handleLockChanged = (data = {}) => {
       const { locked } = data || {};
       setIsLocked(Boolean(locked));
+      // Suppress the very first lock state received after joining
+      if (!initialLockKnownRef.current) {
+        initialLockKnownRef.current = true;
+        return;
+      }
       // Build actor from various possible fields sent by backend
       const byUser = data.by || data.user || data.actor || {};
-      const byName = (typeof byUser === 'string')
-        ? byUser
-        : (byUser?.username || byUser?.name || data.byUsername || data.username || 'someone');
+      // Try to resolve by id when present
+      const byId = data.byId || data.userId || data.actorId || byUser?.id;
+      let byName = undefined;
+      if (byId && Array.isArray(roomUsers) && roomUsers.length) {
+        const found = roomUsers.find(u => u.id === byId);
+        if (found?.username) byName = found.username;
+      }
+      if (!byName) {
+        byName = (typeof byUser === 'string')
+          ? byUser
+          : (byUser?.username || byUser?.name || data.byUsername || data.username);
+      }
+      if (!byName) byName = 'someone';
       const text = locked ? `Room locked by '${byName}'` : `Room unlocked by '${byName}'`;
       setToastMessage(text);
       setShowToast(true);
