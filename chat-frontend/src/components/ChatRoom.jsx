@@ -34,8 +34,6 @@ export default function ChatRoom({ user, onLeave }) {
   const { isDark } = useTheme();
   // Avoid showing lock/unlock toast when joining (initial state sync)
   const initialLockKnownRef = useRef(false);
-  // Track local initiations to decide whether to show toast locally
-  const lastToggleInitiatedRef = useRef(0);
 
   // Backend hooks
   const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping, toggleRoomLock } = useSocket(user);
@@ -87,12 +85,6 @@ export default function ChatRoom({ user, onLeave }) {
       }
       if (!byName) byName = 'someone';
 
-      // Only show toast if local user initiated the toggle or actor matches local user
-      const isActorSelf = (byId && user?.id && byId === user.id) || (byName && user?.username && byName === user.username);
-      const initiatedRecently = Date.now() - (lastToggleInitiatedRef.current || 0) < 5000; // 5s window
-      if (!isActorSelf && !initiatedRecently) {
-        return; // suppress toast for changes initiated by others
-      }
       const text = locked ? `Room locked by '${byName}'` : `Room unlocked by '${byName}'`;
       setToastMessage(text);
       setShowToast(true);
@@ -101,14 +93,12 @@ export default function ChatRoom({ user, onLeave }) {
     return () => {
       socket.off('room-lock-changed', handleLockChanged);
     };
-  }, [socket, roomUsers, user?.id, user?.username]);
+  }, [socket, roomUsers]);
 
   // Toggle lock; rely on event for toast so everyone sees the same
   const handleToggleLock = () => {
     try {
       if (connected) {
-        // Mark that this client initiated a toggle so we show the next toast
-        lastToggleInitiatedRef.current = Date.now();
         toggleRoomLock();
       }
     } catch (e) {
