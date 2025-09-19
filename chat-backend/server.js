@@ -64,6 +64,18 @@ app.get('/api/rooms/:roomId/users', (req, res) => {
   res.json({ users, count: users.length });
 });
 
+// Public endpoint to check current lock status for a room (in-memory)
+app.get('/api/rooms/:roomId/lock', (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const state = roomLocks.get(roomId);
+    res.json({ roomId, locked: Boolean(state?.locked) });
+  } catch (e) {
+    console.error('Error reading lock state:', e);
+    res.status(500).json({ error: 'Failed to read lock state' });
+  }
+});
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);

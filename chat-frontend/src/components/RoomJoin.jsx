@@ -6,6 +6,8 @@ import ThemeToggle from "./ThemeToggle";
 export default function RoomJoin({ user, onJoin }) {
   const [username, setUsername] = useState("");
   const [roomId, setRoomId] = useState(user?.roomId || "");
+  const [roomLocked, setRoomLocked] = useState(false);
+  const [checkingLock, setCheckingLock] = useState(false);
   const { isDark } = useTheme();
 
   // Keep local roomId in sync with parent-provided user.roomId
@@ -14,6 +16,36 @@ export default function RoomJoin({ user, onJoin }) {
       setRoomId(user.roomId);
     }
   }, [user?.roomId]);
+
+  // Check lock state from backend whenever roomId changes
+  useEffect(() => {
+    let aborted = false;
+    async function check() {
+      if (!roomId) {
+        setRoomLocked(false);
+        return;
+      }
+      try {
+        setCheckingLock(true);
+        const base = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+        const res = await fetch(`${base}/api/rooms/${encodeURIComponent(roomId)}/lock`, { method: 'GET' });
+        if (!aborted) {
+          if (res.ok) {
+            const data = await res.json();
+            setRoomLocked(Boolean(data?.locked));
+          } else {
+            setRoomLocked(false);
+          }
+        }
+      } catch (e) {
+        if (!aborted) setRoomLocked(false);
+      } finally {
+        if (!aborted) setCheckingLock(false);
+      }
+    }
+    check();
+    return () => { aborted = true; };
+  }, [roomId]);
 
   // Create Room and copy link
   const createRoom = () => {
@@ -200,10 +232,10 @@ export default function RoomJoin({ user, onJoin }) {
 
             <button
               type="submit"
-              disabled={!username || !roomId}
+              disabled={!username || !roomId || roomLocked || checkingLock}
               className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 sm:py-4 rounded-xl hover:from-blue-700 hover:to-indigo-700 active:from-blue-800 active:to-indigo-800 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-base sm:text-lg shadow-lg hover:shadow-xl active:scale-[0.98] min-h-[48px] touch-manipulation"
             >
-              {roomId ? "Join Room" : "Create Room"}
+              {roomId ? (roomLocked ? "Room Locked" : "Join Room") : "Create Room"}
             </button>
           </form>
         )}
@@ -212,6 +244,12 @@ export default function RoomJoin({ user, onJoin }) {
           <div className={`mt-6 pt-6 border-t transition-colors duration-300 ${
             isDark ? 'border-gray-600' : 'border-gray-200'
           }`}>
+            {roomLocked && (
+              <div className={`mb-3 text-sm flex items-center gap-2 ${isDark ? 'text-yellow-300' : 'text-yellow-700'}`}>
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 8V7a5 5 0 1110 0v1h1a1 1 0 011 1v7a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1h1zm2-1a3 3 0 116 0v1H7V7z" clipRule="evenodd"/></svg>
+                <span>This room is currently locked. Ask the host to unlock it to join.</span>
+              </div>
+            )}
             <p className={`text-xs mb-2 transition-colors duration-300 ${
               isDark ? 'text-gray-400' : 'text-gray-500'
             }`}>Or create a new chat room</p>
