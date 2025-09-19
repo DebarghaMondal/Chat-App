@@ -61,8 +61,7 @@ export default function ChatRoom({ user, onLeave }) {
     if (!socket) return;
     const handleLockChanged = ({ roomId, locked }) => {
       setIsLocked(Boolean(locked));
-      setToastMessage(locked ? 'Room is now locked. New users cannot join.' : 'Room unlocked. New users can join.');
-      setShowToast(true);
+      // Do not show toast here; we only show toast when the local user clicks the toggle
     };
     socket.on('room-lock-changed', handleLockChanged);
     return () => {
