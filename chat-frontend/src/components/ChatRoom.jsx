@@ -20,6 +20,8 @@ export default function ChatRoom({ user, onLeave }) {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
+  const [isLocked, setIsLocked] = useState(false);
+  
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -32,7 +34,7 @@ export default function ChatRoom({ user, onLeave }) {
   const { isDark } = useTheme();
 
   // Backend hooks
-  const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping } = useSocket(user);
+  const { socket, connected, error: socketError, sendMessage, startTyping, stopTyping, toggleRoomLock } = useSocket(user);
   const { messages, loading: messagesLoading, error: messagesError, updateMessage } = useMessages(socket, user);
   const { users: roomUsers, typingUsers } = useRoomUsers(socket, user);
   
@@ -53,6 +55,36 @@ export default function ChatRoom({ user, onLeave }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Listen for lock state updates and show a toast
+  useEffect(() => {
+    if (!socket) return;
+    const handleLockChanged = ({ roomId, locked }) => {
+      setIsLocked(Boolean(locked));
+      setToastMessage(locked ? 'Room is now locked. New users cannot join.' : 'Room unlocked. New users can join.');
+      setShowToast(true);
+    };
+    socket.on('room-lock-changed', handleLockChanged);
+    return () => {
+      socket.off('room-lock-changed', handleLockChanged);
+    };
+  }, [socket]);
+
+  // Optimistic toast on toggle click
+  const handleToggleLock = () => {
+    try {
+      // Show an immediate intent toast; final state toast will come from server
+      const intent = isLocked ? 'Unlocking room...' : 'Locking room...';
+      setToastMessage(intent);
+      setShowToast(true);
+      if (connected) {
+        toggleRoomLock();
+      }
+    } catch (e) {
+      setToastMessage('Failed to toggle room lock');
+      setShowToast(true);
+    }
+  };
 
   // Track scroll position to determine if user is at bottom
   useEffect(() => {
@@ -328,6 +360,7 @@ export default function ChatRoom({ user, onLeave }) {
                   }`}>
                     Group Chat
                   </h1>
+                  
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                     isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-white/20 text-white backdrop-blur-sm'
                   }`}>
@@ -403,6 +436,29 @@ export default function ChatRoom({ user, onLeave }) {
                     : 'bg-white border-gray-200'
                 }`}>
                   <div className="py-2">
+                    {/* Lock/Unlock - Mobile icon entry */}
+                    <button
+                      onClick={() => { handleToggleLock(); setShowMobileMenu(false); }}
+                      className={`w-full px-3 py-2 text-left text-sm transition-colors duration-200 flex items-center gap-2 ${
+                        isDark ? 'text-white hover:bg-gray-700' : 'text-gray-800 hover:bg-gray-50'
+                      }`}
+                      title={isLocked ? 'Unlock room (allow joins)' : 'Lock room (block joins)'}
+                      aria-label={isLocked ? 'Unlock room' : 'Lock room'}
+                      type="button"
+                    >
+                      {isLocked ? (
+                        <>
+                          <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 8V7a5 5 0 1110 0v1h1a1 1 0 011 1v7a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1h1zm2-1a3 3 0 116 0v1H7V7z" clipRule="evenodd"/></svg>
+                          <span>Unlock Room</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a5 5 0 00-5 5v1H4a1 1 0 00-1 1v7a1 1 0 001 1h12a1 1 0 001-1V9a1 1 0 00-1-1h-1V7a5 5 0 00-5-5zm-3 6V7a3 3 0 016 0v1H7z"/></svg>
+                          <span>Lock Room</span>
+                        </>
+                      )}
+                    </button>
+                    
                     {/* Theme Toggle */}
                     <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-600">
                       <div className="flex items-center justify-between">
@@ -496,6 +552,7 @@ export default function ChatRoom({ user, onLeave }) {
                 }`}>
                   Group Chat
                 </h1>
+                
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                   isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-white/20 text-white backdrop-blur-sm'
                 }`}>
@@ -548,6 +605,24 @@ export default function ChatRoom({ user, onLeave }) {
           </div>
           
           <div className="flex items-center space-x-3">
+            {/* Lock/Unlock icon-only */}
+            <button
+              onClick={handleToggleLock}
+              className={`p-2.5 rounded-lg transition-all duration-200 flex items-center justify-center ${
+                isLocked
+                  ? (isDark ? 'bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 border border-yellow-700' : 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border border-yellow-300')
+                  : (isDark ? 'bg-gray-700 text-gray-200 hover:bg-gray-600 border border-gray-600' : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300')
+              }`}
+              title={isLocked ? 'Unlock room (allow joins)' : 'Lock room (block joins)'}
+              aria-label={isLocked ? 'Unlock room' : 'Lock room'}
+              type="button"
+            >
+              {isLocked ? (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 8V7a5 5 0 1110 0v1h1a1 1 0 011 1v7a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1h1zm2-1a3 3 0 116 0v1H7V7z" clipRule="evenodd"/></svg>
+              ) : (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a5 5 0 00-5 5v1H4a1 1 0 00-1 1v7a1 1 0 001 1h12a1 1 0 001-1V9a1 1 0 00-1-1h-1V7a5 5 0 00-5-5zm-3 6V7a3 3 0 016 0v1H7z"/></svg>
+              )}
+            </button>
             {/* Theme Toggle */}
             <ThemeToggle />
             

@@ -64,6 +64,15 @@ export default function useSocket(user) {
       setError(error.message || 'An error occurred');
     });
 
+    // Room lock enforcement: server notifies when join is blocked
+    newSocket.on('room-locked', (payload) => {
+      const msg = payload?.message || 'Room is locked';
+      setError(msg);
+      try { console.warn('[socket] room-locked:', msg); } catch {}
+      // Disconnect to avoid lingering in a room that cannot be joined
+      newSocket.disconnect();
+    });
+
     // Cleanup on unmount or user change
     return () => {
       if (newSocket) {
@@ -86,6 +95,12 @@ export default function useSocket(user) {
     }
   };
 
+  const toggleRoomLock = () => {
+    if (socket && connected) {
+      socket.emit('toggle-room-lock');
+    }
+  };
+
   const startTyping = () => {
     if (socket && connected) {
       socket.emit('typing-start');
@@ -104,6 +119,7 @@ export default function useSocket(user) {
     error,
     sendMessage,
     startTyping,
-    stopTyping
+    stopTyping,
+    toggleRoomLock
   };
 }

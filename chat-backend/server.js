@@ -36,6 +36,8 @@ app.use(express.json());
 // Store active connections
 const activeUsers = new Map(); // socketId -> user info
 const roomUsers = new Map(); // roomId -> Set of user objects
+// In-memory room lock state: roomId -> { locked: boolean, allowedUserIds: Set<string> }
+const roomLocks = new Map();
 
 // API Routes
 app.get('/api/health', (req, res) => {
@@ -76,6 +78,16 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // Enforce lock: only allow users whitelisted when room was locked
+      const lockState = roomLocks.get(roomId);
+      if (lockState?.locked) {
+        const allowed = lockState.allowedUserIds && userId && lockState.allowedUserIds.has(userId);
+        if (!allowed) {
+          socket.emit('room-locked', { message: 'This room is locked. You cannot join right now.' });
+          return;
+        }
+      }
+
       const user = {
         id: userId || uuidv4(),
         username,
@@ -101,6 +113,9 @@ io.on('connection', (socket) => {
 
       // Notify user of successful join
       socket.emit('joined-room', { user, roomId });
+      // Inform client of current lock state (default false)
+      const current = roomLocks.get(roomId);
+      socket.emit('room-lock-changed', { roomId, locked: Boolean(current?.locked) });
 
       // Broadcast to room that user joined
       socket.to(roomId).emit('user-joined', { user });
@@ -270,6 +285,28 @@ io.on('connection', (socket) => {
     }
     
     console.log(`User disconnected: ${socket.id}`);
+  });
+
+  // Toggle room lock: anyone in room can toggle (simple version)
+  socket.on('toggle-room-lock', () => {
+    const user = activeUsers.get(socket.id);
+    if (!user) return;
+    const { roomId } = user;
+    if (!roomLocks.has(roomId)) {
+      roomLocks.set(roomId, { locked: false, allowedUserIds: new Set() });
+    }
+    const state = roomLocks.get(roomId);
+    state.locked = !state.locked;
+    if (state.locked) {
+      // Whitelist current users
+      const currentUsers = roomUsers.get(roomId) || new Set();
+      state.allowedUserIds = new Set(Array.from(currentUsers).map(u => u.id).filter(Boolean));
+    } else {
+      state.allowedUserIds = new Set();
+    }
+    roomLocks.set(roomId, state);
+    io.to(roomId).emit('room-lock-changed', { roomId, locked: state.locked });
+    console.log(`Room ${roomId} ${state.locked ? 'LOCKED' : 'UNLOCKED'}`);
   });
 });
 
