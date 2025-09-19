@@ -56,12 +56,20 @@ export default function ChatRoom({ user, onLeave }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Listen for lock state updates and show a toast
+  // Listen for lock state updates and show a toast to everyone
   useEffect(() => {
     if (!socket) return;
-    const handleLockChanged = ({ roomId, locked }) => {
+    const handleLockChanged = (data = {}) => {
+      const { locked } = data || {};
       setIsLocked(Boolean(locked));
-      // Do not show toast here; we only show toast when the local user clicks the toggle
+      // Build actor from various possible fields sent by backend
+      const byUser = data.by || data.user || data.actor || {};
+      const byName = (typeof byUser === 'string')
+        ? byUser
+        : (byUser?.username || byUser?.name || data.byUsername || data.username || 'someone');
+      const text = locked ? `Room locked by '${byName}'` : `Room unlocked by '${byName}'`;
+      setToastMessage(text);
+      setShowToast(true);
     };
     socket.on('room-lock-changed', handleLockChanged);
     return () => {
@@ -69,13 +77,9 @@ export default function ChatRoom({ user, onLeave }) {
     };
   }, [socket]);
 
-  // Optimistic toast on toggle click
+  // Toggle lock; rely on event for toast so everyone sees the same
   const handleToggleLock = () => {
     try {
-      // Show an immediate intent toast; final state toast will come from server
-      const intent = isLocked ? 'Unlocking room...' : 'Locking room...';
-      setToastMessage(intent);
-      setShowToast(true);
       if (connected) {
         toggleRoomLock();
       }
@@ -357,7 +361,7 @@ export default function ChatRoom({ user, onLeave }) {
                   <h1 className={`font-semibold text-base truncate transition-colors duration-300 ${
                     isDark ? 'text-white' : 'text-white drop-shadow-sm'
                   }`}>
-                    Group Chat
+                    Chat Room
                   </h1>
                   
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -549,7 +553,7 @@ export default function ChatRoom({ user, onLeave }) {
                 <h1 className={`font-semibold text-lg truncate transition-colors duration-300 ${
                   isDark ? 'text-white' : 'text-white drop-shadow-sm'
                 }`}>
-                  Group Chat
+                  Chat Room
                 </h1>
                 
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
